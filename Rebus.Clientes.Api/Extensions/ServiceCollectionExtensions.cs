@@ -57,7 +57,16 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registra o Rebus como cliente RabbitMQ apenas para publicação (sem consumo neste processo).
+    /// Registra o Rebus como cliente RabbitMQ somente para publicação (sem consumo neste processo).
+    ///
+    /// UseRabbitMqAsOneWayClient vs UseRabbitMq:
+    ///   UseRabbitMqAsOneWayClient → a API apenas ENVIA mensagens; não possui fila própria,
+    ///                               não consome e não registra IHostedService de consumo.
+    ///   UseRabbitMq(queue)        → o Worker ENVIA e CONSOME; possui fila própria e
+    ///                               registra IHostedService que monitora a fila continuamente.
+    ///
+    /// A API precisa apenas publicar comandos — o Worker é quem consome e processa.
+    /// Usar OneWayClient evita que a API tente criar ou monitorar uma fila desnecessariamente.
     /// </summary>
     public static IServiceCollection AddRebusPublisher(this IServiceCollection services, IConfiguration configuration)
     {
