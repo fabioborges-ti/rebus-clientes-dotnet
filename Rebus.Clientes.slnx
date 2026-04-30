@@ -7,4 +7,5 @@
   <Project Path="Rebus.Clientes.Domain/Rebus.Clientes.Domain.csproj" />
   <Project Path="Rebus.Clientes.Infrastructure/Rebus.Clientes.Infrastructure.csproj" />
   <Project Path="Rebus.Clientes.Worker/Rebus.Clientes.Worker.csproj" />
+  <Project Path="Rebus.Clientes.UnitTests/Rebus.Clientes.UnitTests.csproj" />
 </Solution>
