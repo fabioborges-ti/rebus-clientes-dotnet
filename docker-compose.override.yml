@@ -1,0 +1,22 @@
+# Sobreposição para desenvolvimento local (Visual Studio / Docker Compose).
+# Não substitui o docker-compose.yml; apenas acrescenta metadados e variáveis úteis ao depurar.
+
+services:
+  api:
+    labels:
+      com.microsoft.visual-studio.project-name: "Rebus.Clientes.Api"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      # Sobrescreve appsettings.Development.json (que usa localhost) para apontar aos serviços do Compose
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=clientesdb;Username=postgres;Password=postgres"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+
+  worker:
+    labels:
+      com.microsoft.visual-studio.project-name: "Rebus.Clientes.Worker"
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      # Idem para o Worker
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=clientesdb;Username=postgres;Password=postgres"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"

@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="docker-compose.dcproj">
+    <Build />
+  </Project>
+  <Project Path="Rebus.Clientes.Api/Rebus.Clientes.Api.csproj" />
+  <Project Path="Rebus.Clientes.Application/Rebus.Clientes.Application.csproj" />
+  <Project Path="Rebus.Clientes.Domain/Rebus.Clientes.Domain.csproj" />
+  <Project Path="Rebus.Clientes.Infrastructure/Rebus.Clientes.Infrastructure.csproj" />
+  <Project Path="Rebus.Clientes.Worker/Rebus.Clientes.Worker.csproj" />
+</Solution>
