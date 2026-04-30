@@ -40,7 +40,7 @@ public class ExceptionHandlingMiddleware
             {
                 Success = false,
                 Message = ex.Message,
-                Errors = [ex.Message]
+                Errors = ex.Errors.ToList()
             });
         }
         catch (NotFoundException ex)

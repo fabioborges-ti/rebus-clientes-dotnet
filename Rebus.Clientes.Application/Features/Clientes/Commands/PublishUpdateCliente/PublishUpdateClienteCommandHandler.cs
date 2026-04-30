@@ -67,26 +67,31 @@ public class PublishUpdateClienteCommandHandler : IRequestHandler<PublishUpdateC
         }
 
         var emailNormalizado = request.Cliente.Email.Trim().ToLowerInvariant();
+        var documentoNormalizado = request.Cliente.Documento.Trim();
 
-        // PASSO [2c] — Verificação de unicidade de e-mail excluindo o próprio cliente
-        // ExistsByEmailExceptIdAsync garante que não haverá falso conflito ao manter o mesmo e-mail.
+        // PASSO [2c] — Verificação de unicidade com coleta de TODOS os erros
+        // Verificamos todas as regras de negócio antes de lançar a exceção,
+        // permitindo que o cliente receba todos os erros de uma vez.
+        var validationErrors = new List<string>();
+
         var emailEmUso = await _clienteRepository.ExistsByEmailExceptIdAsync(request.Id, emailNormalizado, cancellationToken);
-
         if (emailEmUso)
         {
             _logger.LogWarning("Atualização rejeitada: e-mail já pertence a outro cliente. ClienteId: {ClienteId}", request.Id);
-            throw new ConflictException("E-mail já pertence a outro cliente.");
+            validationErrors.Add("E-mail já pertence a outro cliente.");
         }
 
-        var documentoNormalizado = request.Cliente.Documento.Trim();
-
-        // PASSO [2d] — Verificação de unicidade de documento excluindo o próprio cliente
         var documentoEmUso = await _clienteRepository.ExistsByDocumentoExceptIdAsync(request.Id, documentoNormalizado, cancellationToken);
-
         if (documentoEmUso)
         {
             _logger.LogWarning("Atualização rejeitada: documento já pertence a outro cliente. ClienteId: {ClienteId}", request.Id);
-            throw new ConflictException("Documento já pertence a outro cliente.");
+            validationErrors.Add("Documento já pertence a outro cliente.");
+        }
+
+        // Se houver algum erro, lança a exceção com TODOS os erros coletados
+        if (validationErrors.Any())
+        {
+            throw new ConflictException(validationErrors);
         }
 
         // Monta o contrato da mensagem incluindo o ClienteId para o Worker saber qual registro atualizar.

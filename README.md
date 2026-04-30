@@ -79,11 +79,12 @@ O **Rebus** é a camada de orquestração de mensagens entre API e Worker:
    - no `POST`: e-mail e documento ainda não cadastrados;
    - no `PUT`: cliente existe;
    - no `PUT`: e-mail e documento não pertencem a outro cliente (mesmo valor do próprio cliente é permitido).
-4. API persiste o registro da operação na tabela `cliente_operacoes` (estado **Pendente**) e publica a mensagem (`CreateClienteMessage`/`UpdateClienteMessage`).
-5. API responde `202 Accepted` com `correlationId` no corpo.
-6. Worker consome a fila e executa o comando.
-7. O comando persiste no PostgreSQL; o Worker atualiza a operação para **Concluida** (com o `clienteId` resultante) ou **Falhou** (com mensagem de erro, ex.: conflito).
-8. O cliente pode consultar o andamento em `GET /api/operacoes/{correlationId}` a qualquer momento.
+4. **Validação múltipla de conflitos**: Se **múltiplas violações** forem detectadas (ex.: e-mail E documento já existentes), a API retorna **todos os erros de uma vez** no array `errors`, evitando múltiplas tentativas do cliente.
+5. API persiste o registro da operação na tabela `cliente_operacoes` (estado **Pendente**) e publica a mensagem (`CreateClienteMessage`/`UpdateClienteMessage`).
+6. API responde `202 Accepted` com `correlationId` no corpo.
+7. Worker consome a fila e executa o comando.
+8. O comando persiste no PostgreSQL; o Worker atualiza a operação para **Concluida** (com o `clienteId` resultante) ou **Falhou** (com mensagem de erro, ex.: conflito).
+9. O cliente pode consultar o andamento em `GET /api/operacoes/{correlationId}` a qualquer momento.
 
 ### Diagrama do fluxo
 
@@ -165,6 +166,29 @@ Envelope com dados (`GET`):
   "message": "Clientes consultados com sucesso.",
   "errors": [],
   "data": []
+}
+```
+
+### 🔍 Array de erros (`errors`)
+
+A propriedade `errors` é **sempre um array de strings**, mesmo quando há apenas um erro. Isso garante consistência no contrato:
+
+- **Sucesso**: `errors` é um array vazio `[]`
+- **Um erro**: `errors: ["Mensagem de erro"]`
+- **Múltiplos erros**: `errors: ["Erro 1", "Erro 2", "Erro 3"]`
+
+**Benefício**: O cliente da API pode processar todos os erros de uma vez, sem precisar fazer múltiplas requisições para descobrir todos os problemas.
+
+#### Exemplo com múltiplos erros de validação (409 Conflict)
+
+```json
+{
+  "success": false,
+  "message": "E-mail já cadastrado.; Documento já cadastrado.",
+  "errors": [
+    "E-mail já cadastrado.",
+    "Documento já cadastrado."
+  ]
 }
 ```
 
@@ -261,10 +285,56 @@ Requisição:
 }
 ```
 
+❌ `400` — Erro de validação
+
+```json
+{
+  "success": false,
+  "message": "Falha de validação.",
+  "errors": [
+    "O nome deve ter no mínimo 10 caracteres.",
+    "E-mail inválido.",
+    "O documento deve conter exatamente 11 dígitos."
+  ]
+}
+```
+
+❌ `409` — Conflito (email **e/ou** documento já cadastrados)
+
+**Cenário 1**: Apenas email já existe
+```json
+{
+  "success": false,
+  "message": "E-mail já cadastrado.",
+  "errors": ["E-mail já cadastrado."]
+}
+```
+
+**Cenário 2**: Apenas documento já existe
+```json
+{
+  "success": false,
+  "message": "Documento já cadastrado.",
+  "errors": ["Documento já cadastrado."]
+}
+```
+
+**Cenário 3**: **Múltiplos conflitos** (email **E** documento já cadastrados)
+```json
+{
+  "success": false,
+  "message": "E-mail já cadastrado.; Documento já cadastrado.",
+  "errors": [
+    "E-mail já cadastrado.",
+    "Documento já cadastrado."
+  ]
+}
+```
+
+> **🎯 Melhoria**: A API valida **todas as regras de unicidade simultaneamente** e retorna todos os erros de uma vez, melhorando significativamente a experiência do usuário.
+
 Também pode retornar:
 
-- `400` (erro de validação: nome curto, e-mail inválido, CPF inválido)
-- `409` (e-mail ou documento já cadastrado)
 - `500` (falha inesperada; por exemplo, indisponibilidade do RabbitMQ)
 
 ### `PUT /api/clientes/{id}`
@@ -295,11 +365,65 @@ Requisição:
 }
 ```
 
+❌ `400` — Erro de validação
+
+```json
+{
+  "success": false,
+  "message": "Falha de validação.",
+  "errors": [
+    "O nome deve ter no mínimo 10 caracteres.",
+    "E-mail inválido."
+  ]
+}
+```
+
+❌ `404` — Cliente não existe
+
+```json
+{
+  "success": false,
+  "message": "Cliente não encontrado.",
+  "errors": ["Cliente não encontrado."]
+}
+```
+
+❌ `409` — Conflito (email e/ou documento pertence a outro cliente)
+
+**Cenário 1**: Apenas email em uso por outro cliente
+```json
+{
+  "success": false,
+  "message": "E-mail já pertence a outro cliente.",
+  "errors": ["E-mail já pertence a outro cliente."]
+}
+```
+
+**Cenário 2**: Apenas documento em uso por outro cliente
+```json
+{
+  "success": false,
+  "message": "Documento já pertence a outro cliente.",
+  "errors": ["Documento já pertence a outro cliente."]
+}
+```
+
+**Cenário 3**: **Múltiplos conflitos** (email **E** documento em uso por outro cliente)
+```json
+{
+  "success": false,
+  "message": "E-mail já pertence a outro cliente.; Documento já pertence a outro cliente.",
+  "errors": [
+    "E-mail já pertence a outro cliente.",
+    "Documento já pertence a outro cliente."
+  ]
+}
+```
+
+> **🎯 Melhoria**: Assim como no POST, o PUT valida **todas as regras de unicidade simultaneamente** e retorna todos os conflitos detectados de uma vez.
+
 Também pode retornar:
 
-- `400` (corpo da requisição inválido: nome curto, e-mail inválido, CPF inválido)
-- `404` (cliente não existe, não publica mensagem)
-- `409` (e-mail ou documento pertence a outro cliente, não publica mensagem)
 - `500` (falha inesperada ao publicar ou no pipeline)
 
 ### `DELETE /api/clientes/{id}`
@@ -355,19 +479,39 @@ Também pode retornar:
 
 ## ✅ Regras de negócio
 
-| Regra                                                                                       | Onde se aplica                                    |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Nome obrigatório e mín. 10 caracteres                                                       | POST/PUT                                          |
-| E-mail obrigatório e formato válido                                                         | POST/PUT                                          |
-| Documento obrigatório, exatamente 11 dígitos numéricos e CPF válido (dígitos verificadores) | POST/PUT                                          |
-| `POST` bloqueia envio para fila se e-mail já cadastrado                                     | API (antes da fila)                               |
-| `POST` bloqueia envio para fila se documento já cadastrado                                  | API (antes da fila)                               |
-| `PUT` bloqueia envio se cliente não existir                                                 | API (antes da fila)                               |
-| `PUT` bloqueia envio se e-mail pertencer a outro cliente                                    | API (antes da fila)                               |
-| `PUT` bloqueia envio se documento pertencer a outro cliente                                 | API (antes da fila)                               |
-| E-mail único                                                                                | Garantido na API (pré-fila) e reforçado no worker |
-| Documento único                                                                             | Garantido na API (pré-fila) e reforçado no worker |
-| `PUT` permite manter o próprio e-mail/documento sem conflito                                | API (ignora o próprio ID na checagem)             |
+| Regra                                                                                       | Onde se aplica                                    | Observações                                                                                                     |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Nome obrigatório e mín. 10 caracteres                                                       | POST/PUT                                          | FluentValidation                                                                                                |
+| E-mail obrigatório e formato válido                                                         | POST/PUT                                          | FluentValidation                                                                                                |
+| Documento obrigatório, exatamente 11 dígitos numéricos e CPF válido (dígitos verificadores) | POST/PUT                                          | FluentValidation + validador customizado de CPF                                                                 |
+| `POST` bloqueia envio para fila se e-mail já cadastrado                                     | API (antes da fila)                               | Validação antecipada                                                                                            |
+| `POST` bloqueia envio para fila se documento já cadastrado                                  | API (antes da fila)                               | Validação antecipada                                                                                            |
+| **Múltiplos conflitos retornados simultaneamente**                                          | **POST/PUT (antes da fila)**                      | **Coleta todos os erros de unicidade antes de lançar exceção** ✨                                               |
+| `PUT` bloqueia envio se cliente não existir                                                 | API (antes da fila)                               | Validação antecipada                                                                                            |
+| `PUT` bloqueia envio se e-mail pertencer a outro cliente                                    | API (antes da fila)                               | Validação antecipada                                                                                            |
+| `PUT` bloqueia envio se documento pertencer a outro cliente                                 | API (antes da fila)                               | Validação antecipada                                                                                            |
+| E-mail único                                                                                | Garantido na API (pré-fila) e reforçado no worker | Índice único no banco                                                                                           |
+| Documento único                                                                             | Garantido na API (pré-fila) e reforçado no worker | Índice único no banco                                                                                           |
+| `PUT` permite manter o próprio e-mail/documento sem conflito                                | API (ignora o próprio ID na checagem)             | Usa `ExistsByEmailExceptIdAsync` e `ExistsByDocumentoExceptIdAsync`                                            |
+
+### 🎯 Validação múltipla de erros
+
+Uma melhoria importante implementada na API é a **validação simultânea de múltiplas regras de negócio**:
+
+**Antes**: A API lançava a exceção assim que encontrava o **primeiro erro**, forçando o usuário a corrigir erro por erro em múltiplas tentativas.
+
+**Agora**: A API **coleta todas as violações de unicidade** (email e documento) antes de retornar, permitindo que o cliente receba e corrija **todos os problemas de uma vez**.
+
+**Implementação técnica**:
+- `ConflictException` foi estendida para suportar múltiplas mensagens via `IReadOnlyList<string> Errors`
+- Handlers `PublishCreateClienteCommandHandler` e `PublishUpdateClienteCommandHandler` validam todas as regras antes de lançar exceção
+- `ExceptionHandlingMiddleware` serializa o array completo de erros na resposta HTTP
+
+**Benefícios**:
+- ✅ Melhor experiência do usuário (UX)
+- ✅ Redução de requisições HTTP desnecessárias
+- ✅ Feedback mais completo e claro
+- ✅ Contratos consistentes e previsíveis
 
 ## 📦 Pacotes NuGet
 
@@ -404,14 +548,52 @@ dotnet add Rebus.Clientes.Infrastructure/Rebus.Clientes.Infrastructure.csproj pa
 
 ## 🛡️ Tratamento de erros e logging
 
-| Exceção                       | Status HTTP |
-| ----------------------------- | ----------- |
-| `ValidationException`         | `400`       |
-| `DomainValidationException`   | `400`       |
-| `NotFoundException`           | `404`       |
-| `ConflictException`           | `409`       |
-| `ServiceUnavailableException` | `503`       |
-| Não mapeada                   | `500`       |
+| Exceção                       | Status HTTP | Array `errors`                                                |
+| ----------------------------- | ----------- | ------------------------------------------------------------- |
+| `ValidationException`         | `400`       | Lista de mensagens de validação do FluentValidation           |
+| `DomainValidationException`   | `400`       | Mensagem da exceção em array                                  |
+| `NotFoundException`           | `404`       | Mensagem da exceção em array                                  |
+| `ConflictException`           | `409`       | **Array com uma ou múltiplas mensagens de conflito** ✨       |
+| `ServiceUnavailableException` | `503`       | Mensagem da exceção em array                                  |
+| Não mapeada                   | `500`       | Mensagem genérica em array                                    |
+
+### 🎯 Destaque: ConflictException com múltiplos erros
+
+A `ConflictException` foi aprimorada para suportar **múltiplas mensagens de erro simultaneamente**:
+
+```csharp
+public class ConflictException : DomainException
+{
+    public IReadOnlyList<string> Errors { get; }
+
+    // Construtor para erro único (compatibilidade)
+    public ConflictException(string message) : base(message)
+    {
+        Errors = new List<string> { message };
+    }
+
+    // Novo construtor para múltiplos erros
+    public ConflictException(IEnumerable<string> errors) : base(string.Join("; ", errors))
+    {
+        Errors = errors.ToList();
+    }
+}
+```
+
+O middleware `ExceptionHandlingMiddleware` serializa automaticamente todos os erros:
+
+```csharp
+catch (ConflictException ex)
+{
+    context.Response.StatusCode = StatusCodes.Status409Conflict;
+    await context.Response.WriteAsJsonAsync(new ApiResponse
+    {
+        Success = false,
+        Message = ex.Message,
+        Errors = ex.Errors.ToList() // Array de erros
+    });
+}
+```
 
 Além disso:
 
@@ -486,3 +668,20 @@ Na inicialização, a **API aplica migrations do EF Core automaticamente** e exe
 ## 🧠 Considerações finais
 
 Esta é uma **aplicação modelo** voltada para o desenvolvedor que não conhece o Rebus e precisa de uma base prática, com arquitetura limpa, contratos claros e fluxo assíncrono realista para estudo e evolução.
+
+---
+
+## 🆕 Melhorias recentes
+
+### ✨ Validação múltipla de erros (v1.1)
+
+- **Problema resolvido**: Anteriormente, ao enviar dados com múltiplas violações (ex.: email E documento já cadastrados), a API retornava apenas o primeiro erro encontrado, forçando o usuário a corrigir e tentar novamente múltiplas vezes.
+
+- **Solução implementada**: A API agora valida **todas as regras de unicidade simultaneamente** e retorna **todos os conflitos de uma vez** no array `errors`.
+
+- **Impacto**: 
+  - ✅ Redução de até 50% nas requisições HTTP em cenários com múltiplos erros
+  - ✅ Feedback imediato e completo para o usuário
+  - ✅ Experiência de desenvolvimento (DX) e experiência do usuário (UX) significativamente melhores
+
+- **Cobertura de testes**: Adicionados testes unitários específicos para validar o comportamento de múltiplos erros em `PublishCreateClienteCommandHandlerTests` e `PublishUpdateClienteCommandHandlerTests`.

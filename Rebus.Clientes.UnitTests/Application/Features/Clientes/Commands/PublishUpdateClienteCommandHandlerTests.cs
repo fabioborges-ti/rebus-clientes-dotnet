@@ -126,6 +126,23 @@ public class PublishUpdateClienteCommandHandlerTests
     }
 
     [Fact]
+    public async Task Handle_EmailEDocumentoEmUso_DeveLancarConflictExceptionComMultiplosErros()
+    {
+        var id = Guid.NewGuid();
+        _repoMock.Setup(r => r.GetByIdAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(ClienteExistente(id));
+        _repoMock.Setup(r => r.ExistsByEmailExceptIdAsync(id, It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _repoMock.Setup(r => r.ExistsByDocumentoExceptIdAsync(id, It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var act = () => _handler.Handle(new PublishUpdateClienteCommand(id, DtoValido()), CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<ConflictException>();
+        exception.Which.Errors.Should().HaveCount(2);
+        exception.Which.Errors.Should().Contain("E-mail já pertence a outro cliente.");
+        exception.Which.Errors.Should().Contain("Documento já pertence a outro cliente.");
+        _messageBusMock.Verify(b => b.PublishAsync(It.IsAny<UpdateClienteMessage>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Handle_DadosInvalidos_DeveLancarValidationExceptionSemConsultarBanco()
     {
         var dto = DtoValido();

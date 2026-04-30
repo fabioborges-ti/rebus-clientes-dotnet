@@ -2,7 +2,6 @@ using FluentAssertions;
 using FluentValidation;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using Rebus.Clientes.Application.Abstractions.Correlation;
 using Rebus.Clientes.Application.Abstractions.Messaging;
 using Rebus.Clientes.Application.Abstractions.Persistence;
 using Rebus.Clientes.Application.Dtos;
@@ -21,7 +20,6 @@ public class PublishCreateClienteCommandHandlerTests
     private readonly Mock<IClienteOperacaoRepository> _operacaoRepoMock = new();
     private readonly Mock<IUnitOfWork> _uowMock = new();
     private readonly Mock<IClienteMessageBus> _messageBusMock = new();
-    private readonly Mock<ICorrelationIdAccessor> _correlationIdAccessorMock = new();
     private readonly IValidator<ClienteWriteDto> _validator;
     private readonly PublishCreateClienteCommandHandler _handler;
 
@@ -30,14 +28,12 @@ public class PublishCreateClienteCommandHandlerTests
     public PublishCreateClienteCommandHandlerTests()
     {
         _validator = new CreateClienteDtoValidator();
-        _correlationIdAccessorMock.Setup(x => x.GetCorrelationId()).Returns(Guid.NewGuid());
         _handler = new PublishCreateClienteCommandHandler(
             _repoMock.Object,
             _operacaoRepoMock.Object,
             _uowMock.Object,
             _messageBusMock.Object,
             _validator,
-            _correlationIdAccessorMock.Object,
             NullLogger<PublishCreateClienteCommandHandler>.Instance);
     }
 
@@ -124,6 +120,23 @@ public class PublishCreateClienteCommandHandlerTests
         var act = () => _handler.Handle(new PublishCreateClienteCommand(DtoValido()), CancellationToken.None);
 
         await act.Should().ThrowAsync<ConflictException>();
+        _messageBusMock.Verify(b => b.PublishAsync(It.IsAny<CreateClienteMessage>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_EmailEDocumentoJaCadastrados_DeveLancarConflictExceptionComMultiplosErros()
+    {
+        _repoMock.Setup(r => r.ExistsByEmailAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _repoMock.Setup(r => r.ExistsByDocumentoAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var act = () => _handler.Handle(new PublishCreateClienteCommand(DtoValido()), CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<ConflictException>();
+        exception.Which.Errors.Should().HaveCount(2);
+        exception.Which.Errors.Should().Contain("E-mail já cadastrado.");
+        exception.Which.Errors.Should().Contain("Documento já cadastrado.");
         _messageBusMock.Verify(b => b.PublishAsync(It.IsAny<CreateClienteMessage>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 

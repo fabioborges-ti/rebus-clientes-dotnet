@@ -1,7 +1,6 @@
 using FluentValidation;
 using MediatR;
 using Microsoft.Extensions.Logging;
-using Rebus.Clientes.Application.Abstractions.Correlation;
 using Rebus.Clientes.Application.Abstractions.Messaging;
 using Rebus.Clientes.Application.Abstractions.Persistence;
 using Rebus.Clientes.Application.Messaging;
@@ -33,7 +32,6 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
     private readonly IUnitOfWork _unitOfWork;
     private readonly IClienteMessageBus _messageBus;
     private readonly IValidator<Dtos.ClienteWriteDto> _validator;
-    private readonly ICorrelationIdAccessor _correlationIdAccessor;
     private readonly ILogger<PublishCreateClienteCommandHandler> _logger;
 
     public PublishCreateClienteCommandHandler(
@@ -42,7 +40,6 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
         IUnitOfWork unitOfWork,
         IClienteMessageBus messageBus,
         IValidator<Dtos.ClienteWriteDto> validator,
-        ICorrelationIdAccessor correlationIdAccessor,
         ILogger<PublishCreateClienteCommandHandler> logger)
     {
         _clienteRepository = clienteRepository;
@@ -50,7 +47,6 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
         _unitOfWork = unitOfWork;
         _messageBus = messageBus;
         _validator = validator;
-        _correlationIdAccessor = correlationIdAccessor;
         _logger = logger;
     }
 
@@ -62,36 +58,38 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
         await _validator.ValidateAndThrowAsync(request.Cliente, cancellationToken);
 
         var emailNormalizado = request.Cliente.Email.Trim().ToLowerInvariant();
+        var documentoNormalizado = request.Cliente.Documento.Trim();
 
-        // PASSO [2b] — Verificação de unicidade de e-mail antecipada
-        // Embora o Worker também execute validações, verificar aqui evita enfileirar
-        // uma mensagem que sabemos que vai falhar — melhora a experiência do cliente
-        // com resposta imediata (409 Conflict) em vez de aguardar o processamento assíncrono.
+        // PASSO [2b] — Verificação de unicidade com coleta de TODOS os erros
+        // Verificamos todas as regras de negócio antes de lançar a exceção,
+        // permitindo que o cliente receba todos os erros de uma vez.
+        var validationErrors = new List<string>();
+
         var emailJaCadastrado = await _clienteRepository.ExistsByEmailAsync(emailNormalizado, cancellationToken);
-
         if (emailJaCadastrado)
         {
             _logger.LogWarning("Criação rejeitada: e-mail já cadastrado. Email: {Email}", emailNormalizado);
-            throw new ConflictException("E-mail já cadastrado.");
+            validationErrors.Add("E-mail já cadastrado.");
         }
 
-        var documentoNormalizado = request.Cliente.Documento.Trim();
-
-        // PASSO [2c] — Verificação de unicidade de documento antecipada (mesma razão do e-mail)
         var documentoJaCadastrado = await _clienteRepository.ExistsByDocumentoAsync(documentoNormalizado, cancellationToken);
-
         if (documentoJaCadastrado)
         {
             _logger.LogWarning("Criação rejeitada: documento já cadastrado. Documento: {Documento}", documentoNormalizado);
-            throw new ConflictException("Documento já cadastrado.");
+            validationErrors.Add("Documento já cadastrado.");
+        }
+
+        // Se houver algum erro, lança a exceção com TODOS os erros coletados
+        if (validationErrors.Any())
+        {
+            throw new ConflictException(validationErrors);
         }
 
         // Monta o contrato da mensagem que será enviado pelo RabbitMQ.
         // O CorrelationId é gerado aqui e serve como "ticket" para o cliente rastrear a operação.
-        var correlationId = _correlationIdAccessor.GetCorrelationId();
         var message = new CreateClienteMessage
         {
-            CorrelationId = correlationId,
+            CorrelationId = Guid.NewGuid(),
             Nome = request.Cliente.Nome.Trim(),
             Email = emailNormalizado,
             Documento = documentoNormalizado,
@@ -102,7 +100,7 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
         // Registramos a operação como Pendente antes de publicar a mensagem.
         // Se a aplicação cair após publicar mas antes de persistir, perderíamos o rastreamento.
         // A ordem correta é: salvar no banco → publicar na fila (e não o contrário).
-        var operacao = new ClienteOperacao(correlationId, OperacaoTipo.Criacao);
+        var operacao = new ClienteOperacao(message.CorrelationId, OperacaoTipo.Criacao);
         await _operacaoRepository.AddAsync(operacao, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -111,8 +109,8 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
         // pelo processamento. A API retorna imediatamente após este passo.
         await _messageBus.PublishAsync(message, cancellationToken);
 
-        _logger.LogInformation("Solicitação de criação enfileirada. CorrelationId: {CorrelationId}", correlationId);
+        _logger.LogInformation("Solicitação de criação enfileirada. CorrelationId: {CorrelationId}", message.CorrelationId);
 
-        return correlationId;
+        return message.CorrelationId;
     }
 }
