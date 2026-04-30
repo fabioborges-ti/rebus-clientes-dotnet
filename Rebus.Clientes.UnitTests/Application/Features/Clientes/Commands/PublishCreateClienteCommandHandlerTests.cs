@@ -2,6 +2,7 @@ using FluentAssertions;
 using FluentValidation;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using Rebus.Clientes.Application.Abstractions.Correlation;
 using Rebus.Clientes.Application.Abstractions.Messaging;
 using Rebus.Clientes.Application.Abstractions.Persistence;
 using Rebus.Clientes.Application.Dtos;
@@ -20,6 +21,7 @@ public class PublishCreateClienteCommandHandlerTests
     private readonly Mock<IClienteOperacaoRepository> _operacaoRepoMock = new();
     private readonly Mock<IUnitOfWork> _uowMock = new();
     private readonly Mock<IClienteMessageBus> _messageBusMock = new();
+    private readonly Mock<ICorrelationIdAccessor> _correlationIdAccessorMock = new();
     private readonly IValidator<ClienteWriteDto> _validator;
     private readonly PublishCreateClienteCommandHandler _handler;
 
@@ -28,12 +30,14 @@ public class PublishCreateClienteCommandHandlerTests
     public PublishCreateClienteCommandHandlerTests()
     {
         _validator = new CreateClienteDtoValidator();
+        _correlationIdAccessorMock.Setup(x => x.GetCorrelationId()).Returns(Guid.NewGuid());
         _handler = new PublishCreateClienteCommandHandler(
             _repoMock.Object,
             _operacaoRepoMock.Object,
             _uowMock.Object,
             _messageBusMock.Object,
             _validator,
+            _correlationIdAccessorMock.Object,
             NullLogger<PublishCreateClienteCommandHandler>.Instance);
     }
 

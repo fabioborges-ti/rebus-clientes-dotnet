@@ -1,4 +1,5 @@
 // ╔══════════════════════════════════════════════════════════════════════════╗
+// ║                                                                          ║
 // ║  WORKER — Consumidor Rebus de mensagens de clientes                     ║
 // ║                                                                          ║
 // ║  Responsabilidade: consumir mensagens da fila "clientes-commands-queue"  ║

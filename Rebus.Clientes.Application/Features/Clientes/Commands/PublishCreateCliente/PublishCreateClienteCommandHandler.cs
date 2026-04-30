@@ -1,6 +1,7 @@
 using FluentValidation;
 using MediatR;
 using Microsoft.Extensions.Logging;
+using Rebus.Clientes.Application.Abstractions.Correlation;
 using Rebus.Clientes.Application.Abstractions.Messaging;
 using Rebus.Clientes.Application.Abstractions.Persistence;
 using Rebus.Clientes.Application.Messaging;
@@ -32,6 +33,7 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
     private readonly IUnitOfWork _unitOfWork;
     private readonly IClienteMessageBus _messageBus;
     private readonly IValidator<Dtos.ClienteWriteDto> _validator;
+    private readonly ICorrelationIdAccessor _correlationIdAccessor;
     private readonly ILogger<PublishCreateClienteCommandHandler> _logger;
 
     public PublishCreateClienteCommandHandler(
@@ -40,6 +42,7 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
         IUnitOfWork unitOfWork,
         IClienteMessageBus messageBus,
         IValidator<Dtos.ClienteWriteDto> validator,
+        ICorrelationIdAccessor correlationIdAccessor,
         ILogger<PublishCreateClienteCommandHandler> logger)
     {
         _clienteRepository = clienteRepository;
@@ -47,6 +50,7 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
         _unitOfWork = unitOfWork;
         _messageBus = messageBus;
         _validator = validator;
+        _correlationIdAccessor = correlationIdAccessor;
         _logger = logger;
     }
 
@@ -84,9 +88,10 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
 
         // Monta o contrato da mensagem que será enviado pelo RabbitMQ.
         // O CorrelationId é gerado aqui e serve como "ticket" para o cliente rastrear a operação.
+        var correlationId = _correlationIdAccessor.GetCorrelationId();
         var message = new CreateClienteMessage
         {
-            CorrelationId = Guid.NewGuid(),
+            CorrelationId = correlationId,
             Nome = request.Cliente.Nome.Trim(),
             Email = emailNormalizado,
             Documento = documentoNormalizado,
@@ -97,7 +102,7 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
         // Registramos a operação como Pendente antes de publicar a mensagem.
         // Se a aplicação cair após publicar mas antes de persistir, perderíamos o rastreamento.
         // A ordem correta é: salvar no banco → publicar na fila (e não o contrário).
-        var operacao = new ClienteOperacao(message.CorrelationId, OperacaoTipo.Criacao);
+        var operacao = new ClienteOperacao(correlationId, OperacaoTipo.Criacao);
         await _operacaoRepository.AddAsync(operacao, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -106,8 +111,8 @@ public class PublishCreateClienteCommandHandler : IRequestHandler<PublishCreateC
         // pelo processamento. A API retorna imediatamente após este passo.
         await _messageBus.PublishAsync(message, cancellationToken);
 
-        _logger.LogInformation("Solicitação de criação enfileirada. CorrelationId: {CorrelationId}", message.CorrelationId);
+        _logger.LogInformation("Solicitação de criação enfileirada. CorrelationId: {CorrelationId}", correlationId);
 
-        return message.CorrelationId;
+        return correlationId;
     }
 }

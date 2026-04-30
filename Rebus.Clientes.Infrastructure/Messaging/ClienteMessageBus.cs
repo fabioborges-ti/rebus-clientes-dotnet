@@ -36,8 +36,14 @@ public class ClienteMessageBus : IClienteMessageBus
         _serviceProvider = serviceProvider;
     }
 
-    // Resolução lazy do IBus: só é chamada quando o primeiro PublishAsync é executado,
-    // garantindo que o Rebus já esteja inicializado.
+    // Resolução lazy do IBus via IServiceProvider.
+    // Nota: Em versões recentes do Rebus.ServiceProvider, o IBus pode ser injetado
+    // diretamente se o ValidateOnBuild estiver desativado. No entanto, esta abordagem
+    // via IServiceProvider é a mais robusta para evitar problemas de circularidade
+    // ou de inicialização do Rebus durante o startup, garantindo que o IBus
+    // só seja resolvido quando realmente necessário (na primeira chamada de Send).
+    // Isso é especialmente útil em cenários onde o Rebus é configurado como
+    // IHostedService e pode não estar totalmente pronto no momento da validação do DI.
     private IBus Bus => _serviceProvider.GetRequiredService<IBus>();
 
     /// <summary>Envia o comando de criação para a fila via Rebus (Send ponto-a-ponto).</summary>
